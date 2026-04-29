@@ -1,15 +1,20 @@
-name: دانلود فایل دلخواه شما با نت ملی
+name: Download desired file using National Internet
 
 on:
   workflow_dispatch:
     inputs:
       file_url:
-        description: 'لینک مستقیم فایل مورد نظر'
+        description: 'Direct link to the file you want to download'
         required: true
         type: string
       zip_password:
-        description: 'رمز عبور برای فایل ZIP'
+        description: 'Password for the ZIP archive'
         required: true
+        type: string
+      archive_name:
+        description: 'Name of the archive (without .7z extension)'
+        required: false
+        default: 'archive'
         type: string
 
 permissions:
@@ -20,58 +25,59 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: دریافت کد مخزن
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: نصب 7z
+      - name: Install 7zip
         run: sudo apt-get update && sudo apt-get install -y p7zip-full
 
-      - name: دانلود فایل از لینک
+      - name: Download file from link
         run: |
           curl -L --fail --retry 3 -o downloaded_file "${{ github.event.inputs.file_url }}"
           ls -lh downloaded_file
 
-      - name: استخراج نام اصلی فایل (اختیاری)
+      - name: Extract original file name (optional)
         run: |
           ORIGINAL_NAME=$(basename "${{ github.event.inputs.file_url }}" | cut -d '?' -f1)
           [ -z "$ORIGINAL_NAME" ] && ORIGINAL_NAME="downloaded_file"
           echo "ORIGINAL_NAME=$ORIGINAL_NAME" >> $GITHUB_ENV
 
-      - name: ساخت آرشیو رمزدار چندتکه (هر تکه ۹۵ مگابایت)
+      - name: Create password-protected multi-part archive (each part 95 MB)
         run: |
-          7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=3 -v95m "archive.7z" downloaded_file
+          ARCHIVE_NAME="${{ github.event.inputs.archive_name }}"
+          7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=3 -v95m "${ARCHIVE_NAME}.7z" downloaded_file
 
-      - name: حذف فایل اصلی
+      - name: Delete original file
         run: rm -f downloaded_file
 
-      - name: Commit و Push مرحله‌ای تکه‌ها (هر بار ۱۰ تکه)
+      - name: Commit and push chunks step-by-step (10 parts per push)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # لیست تمام تکه‌ها
-          chunks=(archive.7z.*)
+
+          # List all chunks
+          chunks=(${{ github.event.inputs.archive_name }}.7z.*)
           total=${#chunks[@]}
-          batch_size=10  # هر بار ۱۰ تکه
+          batch_size=10  # 10 parts per push
           start=0
-          
+
           while [ $start -lt $total ]; do
             end=$((start + batch_size - 1))
             [ $end -ge $total ] && end=$((total - 1))
-            
+
             echo "Pushing chunks $start to $end ..."
-            
-            # افزودن تکه‌های این بسته
+
+            # Add parts in this batch
             for i in $(seq $start $end); do
               git add "${chunks[$i]}"
             done
-            
-            # commit (با پیام حاوی محدوده)
+
+            # Commit (with message indicating part range)
             git commit -m "Add chunks $((start+1))-$((end+1)) of $total"
-            
-            # push با حداکثر تلاش ۵ بار
+
+            # Push with up to 5 retries
             for attempt in {1..5}; do
               if git push; then
                 echo "Push successful"
@@ -81,8 +87,8 @@ jobs:
                 sleep 10
               fi
             done
-            
+
             start=$((end + 1))
-            # کمی صبر بین بسته‌ها
+            # Wait a bit between batches
             sleep 5
           done
