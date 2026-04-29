@@ -7,14 +7,22 @@ on:
         description: 'Direct link to the file you want to download'
         required: true
         type: string
+
       zip_password:
         description: 'Password for the ZIP archive'
         required: true
         type: string
+
       archive_name:
         description: 'Name of the archive (without .7z extension)'
         required: false
         default: 'archive'
+        type: string
+
+      batch_size:
+        description: 'Number of archive parts to push per commit'
+        required: false
+        default: '10'
         type: string
 
 permissions:
@@ -44,7 +52,7 @@ jobs:
           [ -z "$ORIGINAL_NAME" ] && ORIGINAL_NAME="downloaded_file"
           echo "ORIGINAL_NAME=$ORIGINAL_NAME" >> $GITHUB_ENV
 
-      - name: Create password-protected multi-part archive (each part 95 MB)
+      - name: Create password-protected multi-part archive (each part 95 MB)
         run: |
           ARCHIVE_NAME="${{ github.event.inputs.archive_name }}"
           7z a -p"${{ github.event.inputs.zip_password }}" -mhe=on -mx=3 -v95m "${ARCHIVE_NAME}.7z" downloaded_file
@@ -52,15 +60,20 @@ jobs:
       - name: Delete original file
         run: rm -f downloaded_file
 
-      - name: Commit and push chunks step-by-step (10 parts per push)
+      - name: Commit and push chunks step-by-step
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           # List all chunks
-          chunks=(${{ github.event.inputs.archive_name }}.7z.*)
+          ARCHIVE_NAME="${{ github.event.inputs.archive_name }}"
+          chunks=(${ARCHIVE_NAME}.7z.*)
           total=${#chunks[@]}
-          batch_size=10  # 10 parts per push
+
+          # Convert batch_size to integer
+          batch_size="${{ github.event.inputs.batch_size }}"
+          batch_size=$((batch_size))
+
           start=0
 
           while [ $start -lt $total ]; do
@@ -69,15 +82,15 @@ jobs:
 
             echo "Pushing chunks $start to $end ..."
 
-            # Add parts in this batch
+            # Add chunks for this batch
             for i in $(seq $start $end); do
               git add "${chunks[$i]}"
             done
 
-            # Commit (with message indicating part range)
+            # Commit (with specific range in the message)
             git commit -m "Add chunks $((start+1))-$((end+1)) of $total"
 
-            # Push with up to 5 retries
+            # Push up to 5 times if needed
             for attempt in {1..5}; do
               if git push; then
                 echo "Push successful"
@@ -89,6 +102,5 @@ jobs:
             done
 
             start=$((end + 1))
-            # Wait a bit between batches
-            sleep 5
+            sleep 5  # small delay between batches
           done
