@@ -1,4 +1,4 @@
-name: Download desired file using National Internet
+name: Download file
 
 on:
   workflow_dispatch:
@@ -41,6 +41,29 @@ jobs:
       - name: Install 7zip
         run: sudo apt-get update && sudo apt-get install -y p7zip-full
 
+      - name: Clean up old archive files (if any)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          echo "Checking for existing .7z archives..."
+          found_old=false
+          for f in *.7z*; do
+            if [ -f "$f" ]; then
+              echo "Deleting old archive file: $f"
+              rm -f "$f"
+              found_old=true
+            fi
+          done
+
+          if [ "$found_old" = true ]; then
+            git add -A
+            git commit -m "Clean up previous archive files before new download"
+            git push
+          else
+            echo "No old archives found."
+          fi
+
       - name: Download file from link
         run: |
           curl -L --fail --retry 3 -o downloaded_file "${{ github.event.inputs.file_url }}"
@@ -65,12 +88,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # List all chunks
           ARCHIVE_NAME="${{ github.event.inputs.archive_name }}"
           chunks=(${ARCHIVE_NAME}.7z.*)
           total=${#chunks[@]}
 
-          # Convert batch_size to integer
           batch_size="${{ github.event.inputs.batch_size }}"
           batch_size=$((batch_size))
 
@@ -82,15 +103,14 @@ jobs:
 
             echo "Pushing chunks $start to $end ..."
 
-            # Add chunks for this batch
+            # Add this batch of chunks
             for i in $(seq $start $end); do
               git add "${chunks[$i]}"
             done
 
-            # Commit (with specific range in the message)
             git commit -m "Add chunks $((start+1))-$((end+1)) of $total"
 
-            # Push up to 5 times if needed
+            # Retry push up to 5 times if needed
             for attempt in {1..5}; do
               if git push; then
                 echo "Push successful"
@@ -102,5 +122,5 @@ jobs:
             done
 
             start=$((end + 1))
-            sleep 5  # small delay between batches
+            sleep 5
           done
