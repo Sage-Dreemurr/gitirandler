@@ -1,4 +1,4 @@
-name: Download desired file using National Internet
+name: Download file
 
 on:
   workflow_dispatch:
